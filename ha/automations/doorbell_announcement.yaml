@@ -1,0 +1,71 @@
+# Doorbell Announcement Automation
+# Trigger: Eufy 340 doorbell press
+# Action: Announce on all Echo Dots with music ducking + auto-resume
+#
+# SETUP NOTE: Verify entity names after Eufy + Alexa Media Player integrations are configured.
+# Entity names below are best-guess — update after device discovery.
+#
+# To apply: paste into /home/sysop/homeassistant/automations.yaml (or use HA UI → Automations)
+
+- id: doorbell_whole_house_announce
+  alias: "Doorbell — announce on all speakers"
+  description: "When front doorbell is pressed: duck music, announce, restore volume"
+  trigger:
+    - platform: state
+      # Update this entity name after Eufy integration is confirmed in HA
+      entity_id: binary_sensor.eufy_doorbell_t8200_button
+      to: "on"
+  condition: []
+  action:
+    # Step 1: Save current volumes (snapshot not natively supported — set fixed duck level)
+    - service: media_player.volume_set
+      data:
+        volume_level: 0.2
+      target:
+        entity_id: media_player.whole_house
+
+    # Step 2: Short pause to let volume take effect
+    - delay:
+        milliseconds: 500
+
+    # Step 3: Announce via TTS on all speakers
+    - service: tts.google_translate_say
+      data:
+        entity_id: media_player.whole_house
+        message: "Someone is at the front door."
+        language: en
+
+    # Step 4: Wait for announcement to finish (~3 seconds)
+    - delay:
+        seconds: 4
+
+    # Step 5: Restore volume
+    - service: media_player.volume_set
+      data:
+        volume_level: 0.5
+      target:
+        entity_id: media_player.whole_house
+
+  mode: single
+
+
+# Optional: Show doorbell video on Fire TV when pressed
+- id: doorbell_fire_tv_display
+  alias: "Doorbell — show camera on Fire TV"
+  description: "When doorbell pressed, display front door camera on Fire TV"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.eufy_doorbell_t8200_button
+      to: "on"
+  condition:
+    # Only show if Fire TV is on
+    - condition: state
+      entity_id: media_player.fire_tv  # Update entity name
+      state: "on"
+  action:
+    - service: camera.play_stream
+      target:
+        entity_id: camera.eufy_doorbell_t8200  # Update entity name
+      data:
+        media_player: media_player.fire_tv  # Update entity name
+  mode: single
