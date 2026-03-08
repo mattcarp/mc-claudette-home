@@ -1,71 +1,133 @@
-# Doorbell Announcement Automation
+# Doorbell Announcement Automation — v2
 # Trigger: Eufy 340 doorbell press
-# Action: Announce on all Echo Dots with music ducking + auto-resume
+# Action: Announce on all Echo Dots using Alexa Media Player 'announce' type
+#         (interrupts music cleanly, auto-resumes after — no manual duck/restore needed)
 #
-# SETUP NOTE: Verify entity names after Eufy + Alexa Media Player integrations are configured.
-# Entity names below are best-guess — update after device discovery.
+# SETUP NOTES:
+# 1. Alexa Media Player (HACS) must be installed and authenticated
+# 2. 'notify.alexa_media_whole_house' is created by Alexa Media Player once configured
+# 3. Verify entity names after Eufy + Alexa Media Player integrations are set up:
+#    - Run: grep media_player /config/.storage/entity_registry | grep echo
+#    - Or: HA → Settings → Devices & Services → Alexa Media Player
+# 4. To apply: paste into /home/sysop/homeassistant/automations.yaml (or use HA UI)
 #
-# To apply: paste into /home/sysop/homeassistant/automations.yaml (or use HA UI → Automations)
+# Why 'announce' type vs tts.google_translate_say:
+#   - Alexa 'announce' is native to Echo hardware — sounds better, no lag
+#   - Auto-interrupts music and resumes cleanly (google TTS doesn't do this)
+#   - Works even when Echo Dot volume is set to zero (alarm-type behaviour)
+#   - No dependency on Google TTS service
 
-- id: doorbell_whole_house_announce
-  alias: "Doorbell — announce on all speakers"
-  description: "When front doorbell is pressed: duck music, announce, restore volume"
+# ============================================================
+# PRIMARY: Alexa announce (requires Alexa Media Player HACS)
+# ============================================================
+- id: doorbell_alexa_announce
+  alias: "Doorbell — announce via Alexa (whole house)"
+  description: >
+    When the front doorbell is pressed, announce on all Echo Dots using Alexa
+    Media Player announce type. Music is interrupted and auto-resumes.
   trigger:
     - platform: state
-      # Update this entity name after Eufy integration is confirmed in HA
       entity_id: binary_sensor.eufy_doorbell_t8200_button
       to: "on"
   condition: []
   action:
-    # Step 1: Save current volumes (snapshot not natively supported — set fixed duck level)
-    - service: media_player.volume_set
+    # Use Alexa Media Player notify service — 'announce' type interrupts music + auto-resumes
+    - service: notify.alexa_media_whole_house
       data:
-        volume_level: 0.2
-      target:
-        entity_id: media_player.whole_house
-
-    # Step 2: Short pause to let volume take effect
-    - delay:
-        milliseconds: 500
-
-    # Step 3: Announce via TTS on all speakers
-    - service: tts.google_translate_say
-      data:
-        entity_id: media_player.whole_house
         message: "Someone is at the front door."
-        language: en
-
-    # Step 4: Wait for announcement to finish (~3 seconds)
-    - delay:
-        seconds: 4
-
-    # Step 5: Restore volume
-    - service: media_player.volume_set
-      data:
-        volume_level: 0.5
-      target:
-        entity_id: media_player.whole_house
-
+        data:
+          type: announce
+          # Optional: target specific Echo Dots instead of the whole house group
+          # targets: media_player.echo_dot_living_room, media_player.echo_dot_kitchen
   mode: single
 
 
-# Optional: Show doorbell video on Fire TV when pressed
+# ============================================================
+# OPTIONAL: Show doorbell camera on Fire TV
+# ============================================================
 - id: doorbell_fire_tv_display
   alias: "Doorbell — show camera on Fire TV"
-  description: "When doorbell pressed, display front door camera on Fire TV"
+  description: >
+    When doorbell pressed, display front door camera stream on Fire TV.
+    Only fires if Fire TV is currently on.
   trigger:
     - platform: state
       entity_id: binary_sensor.eufy_doorbell_t8200_button
       to: "on"
   condition:
-    # Only show if Fire TV is on
     - condition: state
-      entity_id: media_player.fire_tv  # Update entity name
+      entity_id: media_player.fire_tv  # Update entity name after discovery
       state: "on"
   action:
     - service: camera.play_stream
       target:
-        entity_id: camera.eufy_doorbell_t8200  # Update entity name
+        entity_id: camera.eufy_doorbell_t8200  # Update entity name after discovery
       data:
-        media_player: media_player.fire_tv  # Update entity name
+        media_player: media_player.fire_tv  # Update entity name after discovery
+  mode: single
+
+
+# ============================================================
+# FALLBACK: google_translate_say (no Alexa Media Player needed)
+# Uncomment this block if Alexa Media Player setup is not complete.
+# ============================================================
+# - id: doorbell_tts_fallback
+#   alias: "Doorbell — TTS fallback (whole house)"
+#   description: "Fallback doorbell announcement using google TTS. Use if Alexa Media Player is not set up."
+#   trigger:
+#     - platform: state
+#       entity_id: binary_sensor.eufy_doorbell_t8200_button
+#       to: "on"
+#   condition: []
+#   action:
+#     # Step 1: Duck volume
+#     - service: media_player.volume_set
+#       data:
+#         volume_level: 0.15
+#       target:
+#         entity_id: media_player.whole_house
+#     # Step 2: Wait for volume to take effect
+#     - delay:
+#         milliseconds: 400
+#     # Step 3: Announce
+#     - service: tts.google_translate_say
+#       data:
+#         entity_id: media_player.whole_house
+#         message: "Someone is at the front door."
+#         language: en
+#     # Step 4: Wait for TTS (~3 seconds)
+#     - delay:
+#         seconds: 4
+#     # Step 5: Restore volume
+#     - service: media_player.volume_set
+#       data:
+#         volume_level: 0.4
+#       target:
+#         entity_id: media_player.whole_house
+#   mode: single
+
+
+# ============================================================
+# BONUS: Quiet hours mode (23:00 — 08:00)
+# Softer announce, kitchen only (don't wake the whole house)
+# ============================================================
+- id: doorbell_quiet_hours
+  alias: "Doorbell — quiet hours (kitchen only, soft)"
+  description: >
+    During quiet hours (23:00–08:00), only announce in the kitchen
+    at a lower volume rather than whole house.
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.eufy_doorbell_t8200_button
+      to: "on"
+  condition:
+    - condition: time
+      after: "23:00:00"
+      before: "08:00:00"
+  action:
+    - service: notify.alexa_media_echo_dot_kitchen
+      data:
+        message: "Someone is at the front door."
+        data:
+          type: announce
   mode: single
