@@ -17,11 +17,17 @@ Usage:
 Environment:
   WHISPER_MODEL     — model size (default: base.en — fast, English only)
                       Options: tiny.en, base.en, small.en, medium, large-v3
+                      Note: openai-whisper uses 'base' not 'base.en' — auto-mapped
   WHISPER_LANGUAGE  — language hint (default: en)
                       For Malta: consider "en" — Maltese/Italian handled by larger models
   STT_API_KEY       — optional auth token (if set, clients must send Bearer <token>)
   STT_PORT          — port to bind (default: 8765)
   STT_HOST          — host to bind (default: 0.0.0.0)
+
+Backend selection (auto-detected):
+  1. faster-whisper — preferred (lower latency, int8 quantisation)
+  2. openai-whisper — fallback (standard, works on Workshop today)
+  3. stub           — no Whisper at all (returns mock transcript)
 """
 
 import io
@@ -37,16 +43,29 @@ try:
 except ImportError:
     raise ImportError("fastapi not installed — run: pip install fastapi uvicorn")
 
+# ---------------------------------------------------------------------------
+# Whisper backend detection — prefer faster-whisper, fall back to openai-whisper
+# ---------------------------------------------------------------------------
+WHISPER_BACKEND = "stub"
+
 try:
-    from faster_whisper import WhisperModel
-    WHISPER_AVAILABLE = True
+    from faster_whisper import WhisperModel as FasterWhisperModel
+    WHISPER_BACKEND = "faster-whisper"
 except ImportError:
-    WHISPER_AVAILABLE = False
-    # Graceful fallback — API starts in stub mode without Whisper
-    # Returns mock transcription for development/testing
+    pass
+
+if WHISPER_BACKEND == "stub":
+    try:
+        import whisper as openai_whisper  # openai-whisper
+        WHISPER_BACKEND = "openai-whisper"
+    except ImportError:
+        pass  # stays as stub
+
+WHISPER_AVAILABLE = WHISPER_BACKEND != "stub"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+logger.info(f"Whisper backend: {WHISPER_BACKEND}")
 
 # ---------------------------------------------------------------------------
 # Config
@@ -56,25 +75,49 @@ LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "en")
 API_KEY = os.environ.get("STT_API_KEY")  # Optional auth
 STUB_MODE = not WHISPER_AVAILABLE
 
+# openai-whisper uses model names without the language suffix (base.en → base)
+# Map model names for compatibility
+_OAI_MODEL_MAP = {
+    "tiny.en": "tiny.en",
+    "base.en": "base.en",
+    "small.en": "small.en",
+    "medium.en": "medium.en",
+    "tiny": "tiny",
+    "base": "base",
+    "small": "small",
+    "medium": "medium",
+    "large-v3": "large",
+    "large-v2": "large",
+    "large": "large",
+}
+OAI_MODEL_SIZE = _OAI_MODEL_MAP.get(MODEL_SIZE, MODEL_SIZE)
+
 app = FastAPI(
     title="Claudette Home — STT Pipeline",
     description="Local Whisper transcription endpoint for Claudette voice pipeline",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # Lazy-load model on first request (faster startup)
-_whisper_model: Optional["WhisperModel"] = None
+_model = None
 
 
-def get_model() -> Optional["WhisperModel"]:
+def get_model():
     """Load and cache the Whisper model on first use."""
-    global _whisper_model
-    if _whisper_model is None and WHISPER_AVAILABLE:
-        logger.info(f"Loading Whisper model: {MODEL_SIZE}")
-        t0 = time.time()
-        _whisper_model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
-        logger.info(f"Whisper model loaded in {time.time() - t0:.1f}s")
-    return _whisper_model
+    global _model
+    if _model is not None or not WHISPER_AVAILABLE:
+        return _model
+
+    logger.info(f"Loading Whisper model ({WHISPER_BACKEND}): {MODEL_SIZE}")
+    t0 = time.time()
+
+    if WHISPER_BACKEND == "faster-whisper":
+        _model = FasterWhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
+    elif WHISPER_BACKEND == "openai-whisper":
+        _model = openai_whisper.load_model(OAI_MODEL_SIZE)
+
+    logger.info(f"Whisper model loaded in {time.time() - t0:.1f}s")
+    return _model
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +142,9 @@ def health():
     return {
         "status": "ok",
         "mode": "stub" if STUB_MODE else "live",
+        "backend": WHISPER_BACKEND,
         "model": MODEL_SIZE if not STUB_MODE else None,
-        "whisper_loaded": _whisper_model is not None,
+        "whisper_loaded": _model is not None,
     }
 
 
@@ -133,35 +177,59 @@ async def transcribe(
         # Useful for testing the pipeline end-to-end without GPU/Whisper
         logger.warning("STUB MODE: Whisper not installed — returning mock transcript")
         return JSONResponse({
-            "text": "stub transcript — install faster-whisper for real transcription",
+            "text": "stub transcript — install faster-whisper or openai-whisper",
             "language": "en",
             "duration_ms": int((time.time() - t0) * 1000),
             "model": "stub",
+            "backend": "stub",
             "stub": True,
         })
 
     model = get_model()
-
-    # Transcribe from bytes
     audio_io = io.BytesIO(audio_bytes)
-    segments, info = model.transcribe(
-        audio_io,
-        language=LANGUAGE if LANGUAGE else None,
-        beam_size=5,
-        vad_filter=True,  # Skip silence — faster for home command style audio
-        vad_parameters=dict(min_silence_duration_ms=300),
-    )
 
-    text = " ".join(seg.text.strip() for seg in segments).strip()
+    if WHISPER_BACKEND == "faster-whisper":
+        # faster-whisper: streaming segments API
+        segments, info = model.transcribe(
+            audio_io,
+            language=LANGUAGE if LANGUAGE else None,
+            beam_size=5,
+            vad_filter=True,  # Skip silence — faster for home command style audio
+            vad_parameters=dict(min_silence_duration_ms=300),
+        )
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        detected_language = info.language
+
+    elif WHISPER_BACKEND == "openai-whisper":
+        # openai-whisper: needs a temp file (doesn't accept BytesIO for some models)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+        try:
+            result = model.transcribe(
+                tmp_path,
+                language=LANGUAGE if LANGUAGE else None,
+                fp16=False,  # CPU — no fp16
+            )
+            text = result.get("text", "").strip()
+            detected_language = result.get("language", LANGUAGE)
+        finally:
+            import os as _os
+            _os.unlink(tmp_path)
+
+    else:
+        raise RuntimeError(f"Unknown backend: {WHISPER_BACKEND}")
+
     duration_ms = int((time.time() - t0) * 1000)
-
-    logger.info(f"Transcribed in {duration_ms}ms: {text!r}")
+    logger.info(f"Transcribed [{WHISPER_BACKEND}] in {duration_ms}ms: {text!r}")
 
     return JSONResponse({
         "text": text,
-        "language": info.language,
+        "language": detected_language,
         "duration_ms": duration_ms,
         "model": MODEL_SIZE,
+        "backend": WHISPER_BACKEND,
     })
 
 
@@ -177,7 +245,8 @@ def list_models():
             {"name": "large-v3",  "size_mb": 3100, "wer_pct": 2.7, "speed": "slowest", "note": "best quality, shared with Kenneth"},
         ],
         "current": MODEL_SIZE,
-        "note": "For Malta, 'medium' handles Maltese-accented English and Italian. 'base.en' fine for plain English."
+        "backend": WHISPER_BACKEND,
+        "note": "For Malta, 'medium' handles Maltese-accented English and Italian. 'base.en' fine for plain English. faster-whisper preferred; openai-whisper works as fallback on Workshop CPU."
     }
 
 
