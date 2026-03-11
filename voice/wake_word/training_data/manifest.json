@@ -1,0 +1,15 @@
+{
+  "generated": "2026-03-11T09:03:04Z",
+  "stats": {
+    "positive": 10,
+    "negative": 10,
+    "skipped": 0
+  },
+  "positive_dir": "/home/sysop/projects/mc-home/voice/wake_word/training_data/positive",
+  "negative_dir": "/home/sysop/projects/mc-home/voice/wake_word/training_data/negative",
+  "notes": [
+    "Positive: multiple gTTS voices + speed + noise augmentation",
+    "For best results, also record 20-30 real samples of your voice",
+    "See training_guide.md for next steps (openWakeWord training notebook)"
+  ]
+}
