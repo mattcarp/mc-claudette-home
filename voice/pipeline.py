@@ -68,8 +68,11 @@ from typing import Optional, Union
 
 # Add sibling dirs to path so we can import our modules
 VOICE_DIR = os.path.dirname(__file__)
+PROJECT_ROOT = os.path.dirname(VOICE_DIR)
 sys.path.insert(0, os.path.join(VOICE_DIR, "intent_parser"))
 sys.path.insert(0, os.path.join(VOICE_DIR, "ha_bridge"))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -364,6 +367,7 @@ def run_pipeline_from_stdin(stub: bool = False):
     """
     Main pipeline loop: reads JSON events from stdin (piped from wake_word_bridge.py).
     On wake_word_detected: records audio → STT → intent → HA.
+    Also processes HA state_changed events for proactive alerts.
 
     Usage:
       python3 wake_word/wake_word_bridge.py | python3 pipeline.py
@@ -373,6 +377,9 @@ def run_pipeline_from_stdin(stub: bool = False):
     """
     from ha_bridge import get_bridge
     bridge = get_bridge(stub=stub)
+
+    # Initialize proactive alert pipeline integration
+    alert_integration = _init_alert_integration()
 
     logger.info(f"Pipeline started. Waiting for wake word events... (stub={stub})")
 
@@ -390,7 +397,19 @@ def run_pipeline_from_stdin(stub: bool = False):
 
         if event_type == "wake_word_detected":
             logger.info(f"Wake word detected: {event.get('word')} (backend={event.get('backend')})")
+            # Deliver any batched low-priority alerts at conversation start
+            if alert_integration:
+                delivered = alert_integration.on_conversation_start()
+                if delivered:
+                    logger.info(f"Delivered {delivered} batched alert(s) at conversation start")
             _handle_wake_word(bridge, stub)
+
+        elif event_type == "state_changed":
+            # HA WebSocket state change → feed to proactive alert engine
+            if alert_integration:
+                modes = alert_integration.on_ha_event(line)
+                if modes:
+                    logger.info(f"Alert routing results: {modes}")
 
         elif event_type == "listener_started":
             logger.info(f"Wake word listener started: {event}")
@@ -401,6 +420,21 @@ def run_pipeline_from_stdin(stub: bool = False):
 
         elif event_type == "error":
             logger.error(f"Wake word error: {event}")
+
+
+def _init_alert_integration():
+    """
+    Initialize the proactive alert pipeline integration.
+    Returns AlertPipelineIntegration or None if import fails.
+    """
+    try:
+        from brain.alert_delivery import AlertPipelineIntegration
+        integration = AlertPipelineIntegration()
+        logger.info("Proactive alert integration initialized")
+        return integration
+    except Exception as e:
+        logger.warning(f"Proactive alert integration unavailable: {e}")
+        return None
 
 
 def _handle_wake_word(bridge, stub: bool):
