@@ -5,14 +5,138 @@ Builds the system prompt context from a Home Assistant entity/scene list.
 
 The intent parser injects this into Claude so it knows what devices exist
 and what actions are possible — no hardcoding, fully dynamic.
+
+2026-04-02: Updated REAL_ENTITIES to match actual HA device registry
+            (read from /home/sysop/homeassistant/.storage/).
+            SAMPLE_ENTITIES preserved as fallback for tests.
 """
 
 from typing import Optional
 
 
 # ---------------------------------------------------------------------------
-# Default entity list for development/testing (no live HA yet).
-# Replace with ha_bridge.get_entities() once HA is online (issue #6).
+# REAL entities — scraped from live HA device/entity registry 2026-04-02
+# These are the actual devices at Xagħra (19 Triq Il-Knisja).
+# Will be dynamically populated at runtime via ha_bridge.get_entities()
+# once HA_TOKEN is set (see issue #6, issue #12).
+# ---------------------------------------------------------------------------
+REAL_ENTITIES = {
+    "media_players": [
+        {
+            "entity_id": "media_player.xaghra_sitting_room",
+            "name": "Sonos Arc (Sitting Room)",
+            "area": "sitting_room",
+            "description": "Main hi-fi speaker, Sonos Arc soundbar",
+        },
+        {
+            "entity_id": "media_player.xaghra_sittiing_room_wiim",
+            "name": "WiiM Ultra (Sitting Room)",
+            "area": "sitting_room",
+            "description": "WiiM Ultra streamer — Spotify, AirPlay, Bluetooth",
+        },
+        {
+            "entity_id": "media_player.living_room_tv",
+            "name": "Living Room TV",
+            "area": "living_room",
+            "description": "Sony BRAVIA 4K — main TV",
+        },
+        {
+            "entity_id": "media_player.bedroom_tv",
+            "name": "Bedroom TV",
+            "area": "bedroom",
+            "description": "Sony BRAVIA — bedroom TV",
+        },
+    ],
+    "climate": [
+        {
+            "entity_id": "climate.9424b87a6361",
+            "name": "Air Conditioner / Gree",
+            "area": "sitting_room",
+            "description": "Gree split AC unit in sitting room",
+        },
+    ],
+    "switches": [
+        # Gree AC controls
+        {
+            "entity_id": "switch.9424b87a6361_fresh_air",
+            "name": "AC Fresh Air",
+            "area": "sitting_room",
+        },
+        {
+            "entity_id": "switch.9424b87a6361_panel_light",
+            "name": "AC Panel Light",
+            "area": "sitting_room",
+        },
+        {
+            "entity_id": "switch.9424b87a6361_quiet_mode",
+            "name": "AC Quiet Mode",
+            "area": "sitting_room",
+        },
+        {
+            "entity_id": "switch.9424b87a6361_xtra_fan",
+            "name": "AC Extra Fan",
+            "area": "sitting_room",
+        },
+        # Sonos controls
+        {
+            "entity_id": "switch.xaghra_sitting_room_loudness",
+            "name": "Sonos Loudness",
+            "area": "sitting_room",
+        },
+        {
+            "entity_id": "switch.xaghra_sitting_room_night_sound",
+            "name": "Sonos Night Mode",
+            "area": "sitting_room",
+        },
+        {
+            "entity_id": "switch.xaghra_sitting_room_speech_enhancement",
+            "name": "Sonos Speech Enhancement",
+            "area": "sitting_room",
+        },
+    ],
+    "sensors": [
+        {
+            "entity_id": "weather.forecast_home",
+            "name": "Home Weather Forecast",
+            "area": "outdoor",
+        },
+        {
+            "entity_id": "sensor.sun_next_rising",
+            "name": "Sunrise time",
+            "area": "outdoor",
+        },
+        {
+            "entity_id": "sensor.sun_next_setting",
+            "name": "Sunset time",
+            "area": "outdoor",
+        },
+        {
+            "entity_id": "binary_sensor.xaghra_sitting_room_microphone",
+            "name": "Sonos Microphone status",
+            "area": "sitting_room",
+        },
+    ],
+    # Lights are NOT yet in HA — placeholder for Zigbee devices via Aqara Hub M3
+    # Will be populated after first Zigbee bulb is paired (issue #12)
+    "lights": [
+        # TODO: add real entity IDs after Zigbee pairing via MOES panel / Aqara M3
+        # e.g. {"entity_id": "light.sitting_room_ceiling", "name": "Sitting Room Ceiling Light", "area": "sitting_room"},
+    ],
+    # Covers (shutters) — not yet in HA, manual for now
+    "covers": [],
+    # Locks — not yet in HA
+    "locks": [],
+    # Scenes — none defined yet in HA, add via HA UI
+    "scenes": [
+        # Placeholder scenes — create these in HA UI once lights are connected
+        # {"entity_id": "scene.movie_night", "name": "Movie Night", "description": "Dim lights, TV on"},
+        # {"entity_id": "scene.goodnight", "name": "Goodnight", "description": "Lights off, AC off"},
+    ],
+}
+
+# ---------------------------------------------------------------------------
+# SAMPLE entities — stub data for development/unit tests (no live HA needed)
+# Preserved unchanged from original implementation for test compatibility.
 # ---------------------------------------------------------------------------
 SAMPLE_ENTITIES = {
     "lights": [
@@ -88,7 +212,11 @@ def build_entity_summary(entities: Optional[dict] = None) -> str:
     if entities.get("climate"):
         lines.append("## Climate")
         for e in entities["climate"]:
-            lines.append(f"  - {e['entity_id']} ({e['name']})")
+            desc = e.get("description", "")
+            line = f"  - {e['entity_id']} ({e['name']})"
+            if desc:
+                line += f" — {desc}"
+            lines.append(line)
 
     if entities.get("locks"):
         lines.append("## Locks")
@@ -98,7 +226,11 @@ def build_entity_summary(entities: Optional[dict] = None) -> str:
     if entities.get("media_players"):
         lines.append("## Media Players")
         for e in entities["media_players"]:
-            lines.append(f"  - {e['entity_id']} ({e['name']}, area: {e.get('area', 'unknown')})")
+            desc = e.get("description", "")
+            line = f"  - {e['entity_id']} ({e['name']}, area: {e.get('area', 'unknown')})"
+            if desc:
+                line += f" — {desc}"
+            lines.append(line)
 
     if entities.get("sensors"):
         lines.append("## Sensors (read-only)")
@@ -193,4 +325,8 @@ When the request is a status query (not a command):
 - "close the shutters" → all covers close
 - "set the dinner scene" → scene.dinner activate
 - "what's the temperature?" → query sensor.living_room_temperature
+- "play jazz on the Sonos" → media_player.xaghra_sitting_room play_media
+- "turn on the TV" → media_player.living_room_tv turn_on
+- "set AC to 22 degrees" → climate.9424b87a6361 set_temperature 22
+- "turn on quiet mode" → switch.9424b87a6361_quiet_mode turn_on
 """
