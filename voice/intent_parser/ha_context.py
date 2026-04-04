@@ -15,122 +15,40 @@ from typing import Optional
 
 
 # ---------------------------------------------------------------------------
-# REAL entities — scraped from live HA device/entity registry 2026-04-02
-# These are the actual devices at Xagħra (19 Triq Il-Knisja).
-# Will be dynamically populated at runtime via ha_bridge.get_entities()
-# once HA_TOKEN is set (see issue #6, issue #12).
+# REAL entities — auto-synced from live HA device/entity registry 2026-04-04
+# Source: HA .storage (/home/sysop/homeassistant/.storage)
+# Re-run: python3 voice/intent_parser/refresh_entities.py [--api] [--write]
 # ---------------------------------------------------------------------------
 REAL_ENTITIES = {
+    "switches": [
+        {"entity_id": "switch.9424b87a6361_fresh_air", "name": "AC Fresh Air", "area": "sitting_room"},
+        {"entity_id": "switch.9424b87a6361_health_mode", "name": "AC Health Mode", "area": "sitting_room"},
+        {"entity_id": "switch.9424b87a6361_panel_light", "name": "AC Panel Light", "area": "sitting_room"},
+        {"entity_id": "switch.9424b87a6361_quiet_mode", "name": "AC Quiet Mode", "area": "sitting_room"},
+        {"entity_id": "switch.9424b87a6361_xtra_fan", "name": "AC Extra Fan", "area": "sitting_room"},
+        {"entity_id": "switch.xaghra_sitting_room_crossfade", "name": "Sonos Crossfade", "area": "sitting_room"},
+        {"entity_id": "switch.xaghra_sitting_room_loudness", "name": "Sonos Loudness", "area": "sitting_room"},
+        {"entity_id": "switch.xaghra_sitting_room_night_sound", "name": "Sonos Night Mode", "area": "sitting_room"},
+        {"entity_id": "switch.xaghra_sitting_room_speech_enhancement", "name": "Sonos Speech Enhancement", "area": "sitting_room"},
+        {"entity_id": "switch.xaghra_sitting_room_status_light", "name": "Sonos Status Light", "area": "sitting_room"},
+        {"entity_id": "switch.xaghra_sitting_room_subwoofer_enabled", "name": "Subwoofer enabled", "area": "unknown"},
+        {"entity_id": "switch.xaghra_sitting_room_surround_enabled", "name": "Surround enabled", "area": "unknown"},
+        {"entity_id": "switch.xaghra_sitting_room_surround_music_full_volume", "name": "Surround music full volume", "area": "unknown"},
+        {"entity_id": "switch.xaghra_sitting_room_touch_controls", "name": "Touch controls", "area": "unknown"},
+    ],
     "media_players": [
-        {
-            "entity_id": "media_player.xaghra_sitting_room",
-            "name": "Sonos Arc (Sitting Room)",
-            "area": "sitting_room",
-            "description": "Main hi-fi speaker, Sonos Arc soundbar",
-        },
-        {
-            "entity_id": "media_player.xaghra_sittiing_room_wiim",
-            "name": "WiiM Ultra (Sitting Room)",
-            "area": "sitting_room",
-            "description": "WiiM Ultra streamer — Spotify, AirPlay, Bluetooth",
-        },
-        {
-            "entity_id": "media_player.living_room_tv",
-            "name": "Living Room TV",
-            "area": "living_room",
-            "description": "Sony BRAVIA 4K — main TV",
-        },
-        {
-            "entity_id": "media_player.bedroom_tv",
-            "name": "Bedroom TV",
-            "area": "bedroom",
-            "description": "Sony BRAVIA — bedroom TV",
-        },
+        {"entity_id": "media_player.bedroom_tv", "name": "Bedroom TV", "area": "bedroom", "description": "Sony BRAVIA bedroom TV"},
+        {"entity_id": "media_player.living_room_tv", "name": "Living Room TV", "area": "living_room", "description": "Sony BRAVIA 4K main TV"},
+        {"entity_id": "media_player.xaghra_sittiing_room_wiim", "name": "WiiM Ultra (Sitting Room)", "area": "sitting_room", "description": "WiiM Ultra streamer"},
+        {"entity_id": "media_player.xaghra_sitting_room", "name": "Sonos Arc (Sitting Room)", "area": "sitting_room", "description": "Sonos Arc soundbar"},
     ],
     "climate": [
-        {
-            "entity_id": "climate.9424b87a6361",
-            "name": "Air Conditioner / Gree",
-            "area": "sitting_room",
-            "description": "Gree split AC unit in sitting room",
-        },
-    ],
-    "switches": [
-        # Gree AC controls
-        {
-            "entity_id": "switch.9424b87a6361_fresh_air",
-            "name": "AC Fresh Air",
-            "area": "sitting_room",
-        },
-        {
-            "entity_id": "switch.9424b87a6361_panel_light",
-            "name": "AC Panel Light",
-            "area": "sitting_room",
-        },
-        {
-            "entity_id": "switch.9424b87a6361_quiet_mode",
-            "name": "AC Quiet Mode",
-            "area": "sitting_room",
-        },
-        {
-            "entity_id": "switch.9424b87a6361_xtra_fan",
-            "name": "AC Extra Fan",
-            "area": "sitting_room",
-        },
-        # Sonos controls
-        {
-            "entity_id": "switch.xaghra_sitting_room_loudness",
-            "name": "Sonos Loudness",
-            "area": "sitting_room",
-        },
-        {
-            "entity_id": "switch.xaghra_sitting_room_night_sound",
-            "name": "Sonos Night Mode",
-            "area": "sitting_room",
-        },
-        {
-            "entity_id": "switch.xaghra_sitting_room_speech_enhancement",
-            "name": "Sonos Speech Enhancement",
-            "area": "sitting_room",
-        },
+        {"entity_id": "climate.9424b87a6361", "name": "Air Conditioner (Sitting Room)", "area": "sitting_room", "description": "Gree split AC unit"},
     ],
     "sensors": [
-        {
-            "entity_id": "weather.forecast_home",
-            "name": "Home Weather Forecast",
-            "area": "outdoor",
-        },
-        {
-            "entity_id": "sensor.sun_next_rising",
-            "name": "Sunrise time",
-            "area": "outdoor",
-        },
-        {
-            "entity_id": "sensor.sun_next_setting",
-            "name": "Sunset time",
-            "area": "outdoor",
-        },
-        {
-            "entity_id": "binary_sensor.xaghra_sitting_room_microphone",
-            "name": "Sonos Microphone status",
-            "area": "sitting_room",
-        },
-    ],
-    # Lights are NOT yet in HA — placeholder for Zigbee devices via Aqara Hub M3
-    # Will be populated after first Zigbee bulb is paired (issue #12)
-    "lights": [
-        # TODO: add real entity IDs after Zigbee pairing via MOES panel / Aqara M3
-        # e.g. {"entity_id": "light.sitting_room_ceiling", "name": "Sitting Room Ceiling Light", "area": "sitting_room"},
-    ],
-    # Covers (shutters) — not yet in HA, manual for now
-    "covers": [],
-    # Locks — not yet in HA
-    "locks": [],
-    # Scenes — none defined yet in HA, add via HA UI
-    "scenes": [
-        # Placeholder scenes — create these in HA UI once lights are connected
-        # {"entity_id": "scene.movie_night", "name": "Movie Night", "description": "Dim lights, TV on"},
-        # {"entity_id": "scene.goodnight", "name": "Goodnight", "description": "Lights off, AC off"},
+        {"entity_id": "weather.forecast_home", "name": "Home Weather", "area": "outdoor", "description": "MET weather forecast"},
+        {"entity_id": "binary_sensor.xaghra_sitting_room_microphone", "name": "Microphone", "area": "unknown"},
+        {"entity_id": "sensor.xaghra_sitting_room_audio_input_format", "name": "Audio input format", "area": "unknown"},
     ],
 }
 
