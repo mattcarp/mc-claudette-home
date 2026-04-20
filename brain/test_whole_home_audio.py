@@ -143,6 +143,32 @@ class TestStubPlayback(unittest.TestCase):
         self.assertEqual(result["action"], "stop")
         self.assertFalse(self.ctrl._playing.get("media_player.echo_dot_kitchen"))
 
+    def test_next_track(self):
+        result = self.ctrl.next_track("whole_house")
+        self.assertEqual(result["action"], "next_track")
+        self.assertEqual(result["entity"], "media_player.whole_house")
+        self.assertTrue(self.ctrl._playing.get("media_player.whole_house"))
+
+    def test_previous_track(self):
+        result = self.ctrl.previous_track("kitchen")
+        self.assertEqual(result["action"], "previous_track")
+        self.assertEqual(result["entity"], "media_player.echo_dot_kitchen")
+        self.assertTrue(self.ctrl._playing.get("media_player.echo_dot_kitchen"))
+
+    def test_volume_up_increments(self):
+        self.ctrl.set_volume("whole_house", 0.4)
+        result = self.ctrl.volume_up("whole_house")
+        self.assertEqual(result["action"], "volume_up")
+        self.assertEqual(result["level"], 0.5)
+        self.assertEqual(self.ctrl._volumes.get("media_player.whole_house"), 0.5)
+
+    def test_volume_down_decrements(self):
+        self.ctrl.set_volume("kitchen", 0.3)
+        result = self.ctrl.volume_down("kitchen")
+        self.assertEqual(result["action"], "volume_down")
+        self.assertEqual(result["level"], 0.2)
+        self.assertEqual(self.ctrl._volumes.get("media_player.echo_dot_kitchen"), 0.2)
+
     def test_play_state_tracked(self):
         self.ctrl.play("whole_house")
         self.assertTrue(self.ctrl._playing.get("media_player.whole_house"))
@@ -208,12 +234,38 @@ class TestIntentRouter(unittest.TestCase):
         self.assertEqual(result["action"], "stop")
         self.assertFalse(self.ctrl._playing.get("media_player.echo_dot_kitchen"))
 
+    def test_route_next_track_intent(self):
+        intent = {"action": "next_track", "zone": "whole_house"}
+        result = self.ctrl.execute_intent(intent)
+        self.assertEqual(result["action"], "next_track")
+        self.assertEqual(result["entity"], "media_player.whole_house")
+
+    def test_route_previous_track_intent(self):
+        intent = {"action": "previous_track", "zone": "kitchen"}
+        result = self.ctrl.execute_intent(intent)
+        self.assertEqual(result["action"], "previous_track")
+        self.assertEqual(result["entity"], "media_player.echo_dot_kitchen")
+
     def test_route_volume_intent(self):
         intent = {"action": "volume", "zone": "bedroom", "level": 0.25}
         result = self.ctrl.execute_intent(intent)
         self.assertEqual(result["action"], "set_volume")
         self.assertEqual(result["entity"], "media_player.echo_dot_bedroom")
         self.assertEqual(result["level"], 0.25)
+
+    def test_route_volume_up_intent(self):
+        self.ctrl.set_volume("bedroom", 0.2)
+        intent = {"action": "volume_up", "zone": "bedroom"}
+        result = self.ctrl.execute_intent(intent)
+        self.assertEqual(result["action"], "volume_up")
+        self.assertEqual(result["level"], 0.3)
+
+    def test_route_volume_down_intent(self):
+        self.ctrl.set_volume("bedroom", 0.2)
+        intent = {"action": "volume_down", "zone": "bedroom"}
+        result = self.ctrl.execute_intent(intent)
+        self.assertEqual(result["action"], "volume_down")
+        self.assertEqual(result["level"], 0.1)
 
     def test_route_status_intent(self):
         self.ctrl.play("whole_house")

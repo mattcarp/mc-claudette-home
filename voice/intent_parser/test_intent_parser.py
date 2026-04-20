@@ -52,6 +52,12 @@ class TestHAContextBuilder(unittest.TestCase):
         self.assertIn("call_service", prompt)
         self.assertIn("clarify", prompt)
 
+    def test_system_prompt_mentions_audio_transport_services(self):
+        prompt = build_system_prompt()
+        self.assertIn("media_next_track", prompt)
+        self.assertIn("volume_up", prompt)
+        self.assertIn("volume_set", prompt)
+
     def test_system_prompt_includes_entity_summary(self):
         prompt = build_system_prompt()
         self.assertIn("light.living_room", prompt)
@@ -154,6 +160,46 @@ class TestIntentParserMocked(unittest.TestCase):
         client = self._make_mock_client(resp)
         result = parse_intent("what's the temperature?", client=client)
         self.assertEqual(result["action"], "query")
+
+    def test_media_next_track_intent_shape(self):
+        resp = json.dumps({
+            "action": "call_service",
+            "domain": "media_player",
+            "service": "media_next_track",
+            "entity_id": "media_player.xaghra_sitting_room",
+            "params": {}
+        })
+        client = self._make_mock_client(resp)
+        result = parse_intent("skip this track", client=client)
+        self.assertEqual(result["domain"], "media_player")
+        self.assertEqual(result["service"], "media_next_track")
+
+    def test_media_volume_up_intent_shape(self):
+        resp = json.dumps({
+            "action": "call_service",
+            "domain": "media_player",
+            "service": "volume_up",
+            "entity_id": "media_player.bedroom_speaker",
+            "params": {}
+        })
+        client = self._make_mock_client(resp)
+        result = parse_intent("turn it up in the bedroom", client=client)
+        self.assertEqual(result["domain"], "media_player")
+        self.assertEqual(result["service"], "volume_up")
+
+    def test_media_volume_set_intent_shape(self):
+        resp = json.dumps({
+            "action": "call_service",
+            "domain": "media_player",
+            "service": "volume_set",
+            "entity_id": "media_player.living_room_speaker",
+            "params": {"volume_level": 0.4}
+        })
+        client = self._make_mock_client(resp)
+        result = parse_intent("set the living room speaker to 40 percent", client=client)
+        self.assertEqual(result["domain"], "media_player")
+        self.assertEqual(result["service"], "volume_set")
+        self.assertEqual(result["params"]["volume_level"], 0.4)
 
     def test_handles_markdown_fences(self):
         """Model wraps JSON in code fences — we strip them."""

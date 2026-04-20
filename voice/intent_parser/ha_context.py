@@ -194,7 +194,7 @@ Single action:
 {{
   "action": "call_service",
   "domain": "light|switch|scene|cover|lock|climate|media_player",
-  "service": "turn_on|turn_off|toggle|open|close|lock|unlock|set_temperature|play_media|activate",
+  "service": "turn_on|turn_off|toggle|open|close|lock|unlock|set_temperature|play_media|activate|media_play|media_pause|media_stop|media_next_track|media_previous_track|volume_set|volume_up|volume_down",
   "entity_id": "entity.id_here",
   "params": {{}}
 }}
@@ -230,6 +230,21 @@ When the request is a status query (not a command):
   "question": "What is the current temperature?"
 }}
 
+## Audio command guidance
+When the user is talking about music / speakers / audio transport:
+- Use `media_player` domain actions.
+- Prefer the most specific matching speaker/zone entity.
+- "everywhere", "whole house", "all speakers" should map to the whole-home/group player when one exists.
+- "play" / "resume" → `media_play`
+- "pause" / "hold on" → `media_pause`
+- "stop the music" → `media_stop`
+- "skip" / "next song" → `media_next_track`
+- "go back" / "previous song" → `media_previous_track`
+- "louder" / "turn it up" → `volume_up`
+- "quieter" / "turn it down" → `volume_down`
+- Exact levels like "set volume to 40%" should use `volume_set` with `params.volume_level` as 0.0–1.0
+- Requests like "play jazz on the Sonos" or "play music everywhere" may use `play_media` when a concrete target/source is known.
+
 ## Available devices and scenes
 {entity_summary}
 
@@ -244,6 +259,12 @@ When the request is a status query (not a command):
 - "set the dinner scene" → scene.dinner activate
 - "what's the temperature?" → query sensor.living_room_temperature
 - "play jazz on the Sonos" → media_player.xaghra_sitting_room play_media
+- "play music everywhere" → media_player whole-house/group play_media or media_play
+- "pause the music downstairs" → media_player downstairs media_pause
+- "skip this track" → media_player current/active zone media_next_track
+- "go back one song in the kitchen" → media_player kitchen media_previous_track
+- "turn it up in the bedroom" → media_player bedroom volume_up
+- "set the living room speaker to 40 percent" → media_player.living_room_speaker volume_set with volume_level 0.4
 - "turn on the TV" → media_player.living_room_tv turn_on
 - "set AC to 22 degrees" → climate.9424b87a6361 set_temperature 22
 - "turn on quiet mode" → switch.9424b87a6361_quiet_mode turn_on

@@ -150,6 +150,20 @@ class AudioControllerStub:
         self._volumes[entity] = level
         return self._log("set_volume", zone=zone, entity=entity, level=level)
 
+    def volume_up(self, zone: str = "whole_house") -> Dict:
+        entity = ZONE_ENTITIES.get(zone, zone)
+        current = self._volumes.get(entity, RESTORE_LEVEL)
+        next_level = min(1.0, round(current + 0.1, 2))
+        self._volumes[entity] = next_level
+        return self._log("volume_up", zone=zone, entity=entity, level=next_level)
+
+    def volume_down(self, zone: str = "whole_house") -> Dict:
+        entity = ZONE_ENTITIES.get(zone, zone)
+        current = self._volumes.get(entity, RESTORE_LEVEL)
+        next_level = max(0.0, round(current - 0.1, 2))
+        self._volumes[entity] = next_level
+        return self._log("volume_down", zone=zone, entity=entity, level=next_level)
+
     def play(self, zone: str = "whole_house", source: Optional[str] = None, content_id: Optional[str] = None) -> Dict:
         entity = ZONE_ENTITIES.get(zone, zone)
         self._playing[entity] = True
@@ -164,6 +178,16 @@ class AudioControllerStub:
         entity = ZONE_ENTITIES.get(zone, zone)
         self._playing[entity] = False
         return self._log("stop", zone=zone, entity=entity)
+
+    def next_track(self, zone: str = "whole_house") -> Dict:
+        entity = ZONE_ENTITIES.get(zone, zone)
+        self._playing[entity] = True
+        return self._log("next_track", zone=zone, entity=entity)
+
+    def previous_track(self, zone: str = "whole_house") -> Dict:
+        entity = ZONE_ENTITIES.get(zone, zone)
+        self._playing[entity] = True
+        return self._log("previous_track", zone=zone, entity=entity)
 
     def status(self, zone: str = "whole_house") -> Dict:
         entity = ZONE_ENTITIES.get(zone, zone)
@@ -195,8 +219,16 @@ class AudioControllerStub:
             return self.pause(zone)
         if action == "stop":
             return self.stop(zone)
+        if action == "next_track":
+            return self.next_track(zone)
+        if action == "previous_track":
+            return self.previous_track(zone)
         if action == "volume":
             return self.set_volume(zone, intent.get("level", RESTORE_LEVEL))
+        if action == "volume_up":
+            return self.volume_up(zone)
+        if action == "volume_down":
+            return self.volume_down(zone)
         if action == "status":
             return self.status(zone)
 
@@ -480,8 +512,20 @@ class AudioController:
         if action == "stop":
             return self.stop(zone)
 
+        if action == "next_track":
+            return self.next_track(zone)
+
+        if action == "previous_track":
+            return self.previous_track(zone)
+
         if action == "volume":
             return self.set_volume(zone, intent.get("level", RESTORE_LEVEL))
+
+        if action == "volume_up":
+            return self.volume_up(zone)
+
+        if action == "volume_down":
+            return self.volume_down(zone)
 
         if action == "status":
             return self.status(zone)
@@ -508,6 +552,18 @@ class AudioController:
                 if service == "media_stop":
                     zone = self._entity_to_zone(entity_id)
                     return self.stop(zone)
+                if service == "media_next_track":
+                    zone = self._entity_to_zone(entity_id)
+                    return self.next_track(zone)
+                if service == "media_previous_track":
+                    zone = self._entity_to_zone(entity_id)
+                    return self.previous_track(zone)
+                if service == "volume_up":
+                    zone = self._entity_to_zone(entity_id)
+                    return self.volume_up(zone)
+                if service == "volume_down":
+                    zone = self._entity_to_zone(entity_id)
+                    return self.volume_down(zone)
 
             # Pass-through for anything else
             return self._call_service(domain, service, service_data)
