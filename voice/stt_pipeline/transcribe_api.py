@@ -33,6 +33,7 @@ Backend selection (auto-detected):
 import io
 import logging
 import os
+import tempfile
 import time
 from typing import Optional
 
@@ -213,38 +214,44 @@ async def transcribe(
     model = get_model()
     audio_io = io.BytesIO(audio_bytes)
 
-    if WHISPER_BACKEND == "faster-whisper":
-        # faster-whisper: streaming segments API
-        segments, info = model.transcribe(
-            audio_io,
-            language=LANGUAGE if LANGUAGE else None,
-            beam_size=5,
-            vad_filter=True,  # Skip silence — faster for home command style audio
-            vad_parameters=dict(min_silence_duration_ms=300),
-        )
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        detected_language = info.language
-
-    elif WHISPER_BACKEND == "openai-whisper":
-        # openai-whisper: needs a temp file (doesn't accept BytesIO for some models)
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-        try:
-            result = model.transcribe(
-                tmp_path,
+    try:
+        if WHISPER_BACKEND == "faster-whisper":
+            # faster-whisper: streaming segments API
+            segments, info = model.transcribe(
+                audio_io,
                 language=LANGUAGE if LANGUAGE else None,
-                fp16=False,  # CPU — no fp16
+                beam_size=5,
+                vad_filter=True,  # Skip silence — faster for home command style audio
+                vad_parameters=dict(min_silence_duration_ms=300),
             )
-            text = result.get("text", "").strip()
-            detected_language = result.get("language", LANGUAGE)
-        finally:
-            import os as _os
-            _os.unlink(tmp_path)
+            text = " ".join(seg.text.strip() for seg in segments).strip()
+            detected_language = info.language
 
-    else:
-        raise RuntimeError(f"Unknown backend: {WHISPER_BACKEND}")
+        elif WHISPER_BACKEND == "openai-whisper":
+            # openai-whisper: needs a temp file (doesn't accept BytesIO for some models)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp.write(audio_bytes)
+                tmp_path = tmp.name
+            try:
+                result = model.transcribe(
+                    tmp_path,
+                    language=LANGUAGE if LANGUAGE else None,
+                    fp16=False,  # CPU — no fp16
+                )
+                text = result.get("text", "").strip()
+                detected_language = result.get("language", LANGUAGE)
+            finally:
+                os.unlink(tmp_path)
+
+        else:
+            raise RuntimeError(f"Unknown backend: {WHISPER_BACKEND}")
+
+    except Exception as e:
+        logger.exception("Transcription failed")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to decode or transcribe audio: {type(e).__name__}",
+        ) from e
 
     duration_ms = int((time.time() - t0) * 1000)
     logger.info(f"Transcribed [{WHISPER_BACKEND}] in {duration_ms}ms: {text!r}")

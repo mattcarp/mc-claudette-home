@@ -84,4 +84,5 @@ Lists available models with latency/accuracy tradeoffs.
 - **VAD filter enabled** — strips silence from audio automatically, speeds up transcription.
 - **Auth:** Optional. Set `STT_API_KEY` in `/etc/environment` to require Bearer token.
 - **Upload guardrails:** rejects unsupported media types with HTTP 415 and oversized uploads with HTTP 413. Configure the max payload via `STT_MAX_AUDIO_BYTES` (default 5 MiB).
+- **Corrupted-audio handling:** decoder/transcription failures now return HTTP 400 instead of bubbling up as a server crash, so bad panel uploads don't poison the service.
 - **16kHz mono WAV** is the ideal format from the Android panel. Other accepted formats: WebM, OGG, MP4/M4A, and MP3.

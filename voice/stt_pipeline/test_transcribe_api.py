@@ -293,6 +293,14 @@ class TestErrors:
         r = client.get("/does-not-exist")
         assert r.status_code == 404
 
+    def test_transcribe_corrupted_audio_returns_400(self, client):
+        r = client.post(
+            "/transcribe",
+            files={"audio": ("garbage.wav", io.BytesIO(b"not a real wav"), "audio/wav")},
+        )
+        assert r.status_code == 400
+        assert "Failed to decode or transcribe audio" in r.json()["detail"]
+
 
 # ---------------------------------------------------------------------------
 # Auth tests (only relevant if STT_API_KEY is set)
