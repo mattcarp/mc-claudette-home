@@ -237,6 +237,7 @@ AREA_OVERRIDES = {
     "media_player.xaghra_sittiing_room_wiim": "sitting_room",
     "media_player.living_room_tv": "living_room",
     "media_player.bedroom_tv": "bedroom",
+    "media_player.roof_roam_pair": "outdoor",
     "climate.9424b87a6361": "sitting_room",
     "switch.9424b87a6361_panel_light": "sitting_room",
     "switch.9424b87a6361_quiet_mode": "sitting_room",
@@ -288,6 +289,7 @@ def build_real_entities(raw: List[dict]) -> Dict[str, List[dict]]:
             "media_player.xaghra_sittiing_room_wiim": "WiiM Ultra streamer",
             "media_player.living_room_tv": "Sony BRAVIA 4K main TV",
             "media_player.bedroom_tv": "Sony BRAVIA bedroom TV",
+            "media_player.roof_roam_pair": "Paired Sonos Roam speakers for the roof terrace",
             "climate.9424b87a6361": "Gree split AC unit",
             "weather.forecast_home": "MET weather forecast",
         }

@@ -54,6 +54,7 @@ import os
 import re
 import sys
 import time
+from datetime import UTC, datetime
 from typing import Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
@@ -124,8 +125,8 @@ class AudioControllerStub:
         logger.info("[STUB] %s", json.dumps(entry))
         return entry
 
-    def announce(self, message: str, zone: str = "whole_house") -> Dict:
-        return self._log("announce", message=message, zone=zone)
+    def announce(self, message: str, zone: str = "whole_house", tts_mode: Optional[str] = None) -> Dict:
+        return self._log("announce", message=message, zone=zone, tts_mode=tts_mode)
 
     def doorbell_announce(
         self,
@@ -133,16 +134,30 @@ class AudioControllerStub:
         duck_level: float = DUCK_LEVEL,
         restore_level: float = RESTORE_LEVEL,
         pause_seconds: float = 4.0,
+        tts_mode: Optional[str] = None,
+        now: Optional[datetime] = None,
     ) -> Dict:
-        self._volumes["whole_house_pre_duck"] = self._volumes.get("whole_house", 0.4)
-        self._volumes["whole_house"] = duck_level
+        effective_tts_mode = tts_mode or TTS_MODE
+        strategy = AudioController._doorbell_strategy(effective_tts_mode)
+        zone = AudioController._default_doorbell_zone(now)
+        entity = ZONE_ENTITIES.get(zone, zone)
+
+        if strategy == "duck_restore":
+            self._volumes[f"{entity}_pre_duck"] = self._volumes.get(entity, 0.4)
+            self._volumes[entity] = duck_level
+
         result = self._log(
             "doorbell_announce",
             message=message,
+            zone=zone,
+            strategy=strategy,
+            tts_mode=effective_tts_mode,
             duck_level=duck_level,
             restore_level=restore_level,
         )
-        self._volumes["whole_house"] = restore_level
+
+        if strategy == "duck_restore":
+            self._volumes[entity] = restore_level
         return result
 
     def set_volume(self, zone: str, level: float) -> Dict:
@@ -204,10 +219,15 @@ class AudioControllerStub:
         zone = intent.get("zone", "whole_house")
 
         if action == "announce":
-            return self.announce(intent.get("message", ""), zone=zone)
+            return self.announce(
+                intent.get("message", ""),
+                zone=zone,
+                tts_mode=intent.get("tts_mode"),
+            )
         if action == "doorbell_announce":
             return self.doorbell_announce(
-                message=intent.get("message", "Someone is at the front door.")
+                message=intent.get("message", "Someone is at the front door."),
+                tts_mode=intent.get("tts_mode"),
             )
         if action == "play":
             return self.play(
@@ -291,16 +311,17 @@ class AudioController:
     # -------------------------------------------------------------------
     # Announce (TTS on Echo Dots)
     # -------------------------------------------------------------------
-    def announce(self, message: str, zone: str = "whole_house") -> Dict:
+    def announce(self, message: str, zone: str = "whole_house", tts_mode: Optional[str] = None) -> Dict:
         """
         Speak a message on Echo Dots in the given zone.
         Uses Alexa Media Player 'announce' type so it interrupts music cleanly.
         Falls back to google_translate_say if Alexa integration not available.
         """
         entity = self._resolve_zone(zone)
-        logger.info("Announcing '%s' on %s", message, entity)
+        effective_tts_mode = tts_mode or TTS_MODE
+        logger.info("Announcing '%s' on %s via %s", message, entity, effective_tts_mode)
 
-        if TTS_MODE == "alexa_announce":
+        if effective_tts_mode == "alexa_announce":
             # Alexa Media Player notify service — proper announce that interrupts music
             # Service name pattern: notify.alexa_media_<entity_suffix>
             entity_suffix = entity.replace("media_player.", "").replace(".", "_")
@@ -334,39 +355,56 @@ class AudioController:
         duck_level: float = DUCK_LEVEL,
         restore_level: float = RESTORE_LEVEL,
         pause_seconds: float = 4.0,
+        tts_mode: Optional[str] = None,
+        now: Optional[datetime] = None,
     ) -> Dict:
         """
         Doorbell announcement pattern:
-          1. Duck whole-house volume
-          2. Announce on all speakers
-          3. Wait for TTS to finish
-          4. Restore volume
-        """
-        logger.info("Doorbell: duck → announce → restore")
-        entity = ZONE_ENTITIES["whole_house"]
+          - Alexa native announce: announce directly; Echo devices handle interrupt/resume.
+          - Other TTS modes: duck the target zone, announce, then restore.
 
-        # 1. Duck volume
+        During quiet hours (23:00–08:00), default to kitchen only.
+        """
+        effective_tts_mode = tts_mode or TTS_MODE
+        strategy = self._doorbell_strategy(effective_tts_mode)
+        zone = self._default_doorbell_zone(now)
+        entity = self._resolve_zone(zone)
+
+        logger.info("Doorbell: %s on %s via %s", strategy, entity, effective_tts_mode)
+
+        if strategy == "native_announce":
+            self.announce(message, zone=zone, tts_mode=effective_tts_mode)
+            return {
+                "announced": True,
+                "message": message,
+                "zone": zone,
+                "strategy": strategy,
+                "tts_mode": effective_tts_mode,
+            }
+
         self._call_service(
             "media_player",
             "volume_set",
             {"entity_id": entity, "volume_level": duck_level},
         )
         time.sleep(0.3)
-
-        # 2. Announce
-        self.announce(message, zone="whole_house")
-
-        # 3. Wait for TTS
+        self.announce(message, zone=zone, tts_mode=effective_tts_mode)
         time.sleep(pause_seconds)
-
-        # 4. Restore volume
         self._call_service(
             "media_player",
             "volume_set",
             {"entity_id": entity, "volume_level": restore_level},
         )
 
-        return {"announced": True, "message": message, "duck_level": duck_level, "restore_level": restore_level}
+        return {
+            "announced": True,
+            "message": message,
+            "zone": zone,
+            "strategy": strategy,
+            "tts_mode": effective_tts_mode,
+            "duck_level": duck_level,
+            "restore_level": restore_level,
+        }
 
     # -------------------------------------------------------------------
     # Volume
@@ -491,11 +529,13 @@ class AudioController:
             return self.announce(
                 intent.get("message", ""),
                 zone=zone,
+                tts_mode=intent.get("tts_mode"),
             )
 
         if action == "doorbell_announce":
             return self.doorbell_announce(
-                message=intent.get("message", "Someone is at the front door.")
+                message=intent.get("message", "Someone is at the front door."),
+                tts_mode=intent.get("tts_mode"),
             )
 
         if action == "play":
@@ -575,6 +615,22 @@ class AudioController:
         """Reverse lookup: entity ID → zone name (or return entity_id as-is)."""
         reverse = {v: k for k, v in ZONE_ENTITIES.items()}
         return reverse.get(entity_id, entity_id)
+
+    @staticmethod
+    def _is_quiet_hours_at(now: Optional[datetime] = None) -> bool:
+        now = now or datetime.now(UTC)
+        minutes = now.hour * 60 + now.minute
+        quiet_start = 23 * 60
+        quiet_end = 8 * 60
+        return minutes >= quiet_start or minutes < quiet_end
+
+    @classmethod
+    def _default_doorbell_zone(cls, now: Optional[datetime] = None) -> str:
+        return "kitchen" if cls._is_quiet_hours_at(now) else "whole_house"
+
+    @staticmethod
+    def _doorbell_strategy(tts_mode: Optional[str] = None) -> str:
+        return "native_announce" if (tts_mode or TTS_MODE) == "alexa_announce" else "duck_restore"
 
     @staticmethod
     def _slugify(text: str) -> str:

@@ -12,6 +12,7 @@ import io
 import sys
 import os
 import unittest
+from datetime import datetime
 from contextlib import redirect_stdout
 
 # Add brain dir to path
@@ -85,15 +86,19 @@ class TestStubDoorbellAnnounce(unittest.TestCase):
         self.assertEqual(result["restore_level"], 0.5)
 
     def test_doorbell_volume_restored(self):
-        """Volume should be at restore_level after doorbell sequence."""
-        self.ctrl.doorbell_announce(duck_level=0.1, restore_level=0.45)
-        # Stub tracks volume changes
-        self.assertEqual(self.ctrl._volumes.get("whole_house"), 0.45)
+        """google_tts doorbell flow should restore target-zone volume."""
+        self.ctrl.doorbell_announce(
+            duck_level=0.1,
+            restore_level=0.45,
+            tts_mode="google_tts",
+        )
+        # Stub tracks volume changes on the resolved entity
+        self.assertEqual(self.ctrl._volumes.get("media_player.whole_house"), 0.45)
 
     def test_doorbell_volume_was_ducked(self):
-        """Volume should have been ducked (pre-duck saved)."""
-        self.ctrl.doorbell_announce(duck_level=0.1)
-        self.assertIn("whole_house_pre_duck", self.ctrl._volumes)
+        """google_tts doorbell flow should save pre-duck target-zone volume."""
+        self.ctrl.doorbell_announce(duck_level=0.1, tts_mode="google_tts")
+        self.assertIn("media_player.whole_house_pre_duck", self.ctrl._volumes)
 
 
 class TestStubVolumeControl(unittest.TestCase):
@@ -309,6 +314,104 @@ class TestDefaultConstants(unittest.TestCase):
     def test_restore_level_is_reasonable(self):
         self.assertGreater(RESTORE_LEVEL, 0.2)
         self.assertLess(RESTORE_LEVEL, 1.0)
+
+
+class TestDoorbellRouting(unittest.TestCase):
+    """Doorbell strategy + quiet-hours routing."""
+
+    def test_quiet_hours_wraps_across_midnight(self):
+        from whole_home_audio import AudioController
+
+        self.assertTrue(AudioController._is_quiet_hours_at(datetime(2026, 4, 26, 23, 30)))
+        self.assertTrue(AudioController._is_quiet_hours_at(datetime(2026, 4, 27, 7, 59)))
+        self.assertFalse(AudioController._is_quiet_hours_at(datetime(2026, 4, 26, 12, 0)))
+
+    def test_default_doorbell_zone_switches_to_kitchen_during_quiet_hours(self):
+        from whole_home_audio import AudioController
+
+        self.assertEqual(
+            AudioController._default_doorbell_zone(datetime(2026, 4, 26, 23, 30)),
+            "kitchen",
+        )
+        self.assertEqual(
+            AudioController._default_doorbell_zone(datetime(2026, 4, 26, 12, 0)),
+            "whole_house",
+        )
+
+    def test_doorbell_strategy_matches_tts_mode(self):
+        from whole_home_audio import AudioController
+
+        self.assertEqual(AudioController._doorbell_strategy("alexa_announce"), "native_announce")
+        self.assertEqual(AudioController._doorbell_strategy("google_tts"), "duck_restore")
+
+    def test_native_alexa_doorbell_skips_manual_duck_restore(self):
+        from whole_home_audio import AudioController
+
+        class RecordingController(AudioController):
+            def __init__(self):
+                self.calls = []
+
+            def announce(self, message: str, zone: str = "whole_house", tts_mode=None):
+                self.calls.append({"kind": "announce", "message": message, "zone": zone, "tts_mode": tts_mode})
+                return {"ok": True}
+
+            def _call_service(self, domain: str, service: str, data: dict):
+                self.calls.append({"kind": "service", "domain": domain, "service": service, "data": data})
+                return {"ok": True}
+
+        ctrl = RecordingController()
+        result = ctrl.doorbell_announce(
+            message="Someone is at the front door.",
+            tts_mode="alexa_announce",
+            pause_seconds=0,
+            now=datetime(2026, 4, 26, 12, 0),
+        )
+
+        self.assertEqual(result["strategy"], "native_announce")
+        self.assertEqual(result["zone"], "whole_house")
+        self.assertEqual(ctrl.calls, [
+            {
+                "kind": "announce",
+                "message": "Someone is at the front door.",
+                "zone": "whole_house",
+                "tts_mode": "alexa_announce",
+            }
+        ])
+
+    def test_google_tts_doorbell_ducks_only_target_zone(self):
+        from whole_home_audio import AudioController
+
+        class RecordingController(AudioController):
+            def __init__(self):
+                self.calls = []
+
+            def announce(self, message: str, zone: str = "whole_house", tts_mode=None):
+                self.calls.append({"kind": "announce", "message": message, "zone": zone, "tts_mode": tts_mode})
+                return {"ok": True}
+
+            def _call_service(self, domain: str, service: str, data: dict):
+                self.calls.append({"kind": "service", "domain": domain, "service": service, "data": data})
+                return {"ok": True}
+
+            def _resolve_zone(self, zone: str) -> str:
+                return ZONE_ENTITIES.get(zone, zone)
+
+        ctrl = RecordingController()
+        result = ctrl.doorbell_announce(
+            message="Package delivery",
+            tts_mode="google_tts",
+            pause_seconds=0,
+            now=datetime(2026, 4, 26, 23, 30),
+        )
+
+        self.assertEqual(result["strategy"], "duck_restore")
+        self.assertEqual(result["zone"], "kitchen")
+        self.assertEqual(ctrl.calls[0]["service"], "volume_set")
+        self.assertEqual(ctrl.calls[0]["data"]["entity_id"], "media_player.echo_dot_kitchen")
+        self.assertEqual(ctrl.calls[1]["kind"], "announce")
+        self.assertEqual(ctrl.calls[1]["zone"], "kitchen")
+        self.assertEqual(ctrl.calls[2]["service"], "volume_set")
+        self.assertEqual(ctrl.calls[2]["data"]["entity_id"], "media_player.echo_dot_kitchen")
 
 
 class TestEntityDiscovery(unittest.TestCase):
