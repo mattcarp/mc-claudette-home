@@ -8,9 +8,10 @@ Usage:
   python3 wake_word_bridge.py --backend porcupine --model models/claudette_linux.ppn
   python3 wake_word_bridge.py --backend porcupine --builtin-keyword porcupine
   python3 wake_word_bridge.py --backend oww --model models/claudette.tflite
+  python3 wake_word_bridge.py --backend stub --max-events 3
 
 Environment:
-  WAKE_WORD_BACKEND=porcupine|oww      (default: porcupine)
+  WAKE_WORD_BACKEND=porcupine|oww|stub (default: porcupine)
   PORCUPINE_ACCESS_KEY=...             (required for porcupine backend)
   WAKE_WORD_MODEL=path/to/model        (optional, overrides --model default)
   WAKE_WORD_BUILTIN_KEYWORD=keyword    (optional, Porcupine built-in keyword)
@@ -29,6 +30,7 @@ import struct
 import sys
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 
 def emit_event(event_type: str, data: dict):
@@ -41,8 +43,8 @@ def emit_event(event_type: str, data: dict):
     print(json.dumps(event), flush=True)
 
 
-def on_detection(backend: str, word: str, score: float = None, stt_url: str = None):
-    """Called on wake word detection. Emits event and triggers STT pipeline."""
+def on_detection(backend: str, word: str, score: float = None, stt_url: Optional[str] = None):
+    """Called on wake word detection. Emits event and optionally triggers STT pipeline."""
     emit_event("wake_word_detected", {
         "backend": backend,
         "word": word,
@@ -99,9 +101,14 @@ def _run_stt_pipeline(stt_url: str):
     # TODO (issue #7): Pass transcript to intent parser
 
 
-def run_porcupine(model_path: str | None, access_key: str, sensitivity: float, builtin_keyword: str | None = None):
+def run_porcupine(
+    model_path: Optional[str],
+    access_key: str,
+    sensitivity: float,
+    stt_url: Optional[str] = None,
+    builtin_keyword: Optional[str] = None,
+):
     """Run Porcupine backend with either a custom .ppn model or a built-in keyword."""
-    import struct
     import pvporcupine
     import pyaudio
 
@@ -146,20 +153,29 @@ def run_porcupine(model_path: str | None, access_key: str, sensitivity: float, b
         pcm = stream.read(porcupine.frame_length, exception_on_overflow=False)
         pcm = struct.unpack_from("h" * porcupine.frame_length, pcm)
         if porcupine.process(pcm) >= 0:
-            on_detection("porcupine", builtin_keyword or "claudette", stt_url=stt_url)
+            on_detection(
+                "porcupine",
+                builtin_keyword or "claudette",
+                stt_url=stt_url,
+            )
 
 
-def run_oww(model_path: str, threshold: float):
+def run_oww(model_path: str, threshold: float, stt_url: Optional[str] = None):
     """Run openWakeWord backend."""
     import numpy as np
     import pyaudio
     from openwakeword.model import Model
 
     oww_model = Model(wakeword_models=[model_path])
-    CHUNK = 1620
+    chunk = 1620
     pa = pyaudio.PyAudio()
-    stream = pa.open(rate=16000, channels=1, format=pyaudio.paInt16,
-                     input=True, frames_per_buffer=CHUNK)
+    stream = pa.open(
+        rate=16000,
+        channels=1,
+        format=pyaudio.paInt16,
+        input=True,
+        frames_per_buffer=chunk,
+    )
 
     emit_event("listener_started", {
         "backend": "oww",
@@ -177,11 +193,41 @@ def run_oww(model_path: str, threshold: float):
     signal.signal(signal.SIGTERM, shutdown)
 
     while True:
-        audio = stream.read(CHUNK, exception_on_overflow=False)
+        audio = stream.read(chunk, exception_on_overflow=False)
         audio_np = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
         for word, score in oww_model.predict(audio_np).items():
             if score >= threshold:
                 on_detection("oww", word, score, stt_url=stt_url)
+
+
+def run_stub(
+    max_events: int = 1,
+    interval: float = 0.1,
+    word: str = "claudette",
+    stt_url: Optional[str] = None,
+):
+    """
+    Deterministic fake backend for CI/dev runs with no audio hardware.
+    Emits listener lifecycle events plus a fixed number of wake detections.
+    """
+    emit_event("listener_started", {
+        "backend": "stub",
+        "word": word,
+        "max_events": max_events,
+        "interval": interval,
+    })
+
+    count = 0
+    try:
+        while max_events <= 0 or count < max_events:
+            count += 1
+            on_detection("stub", word, score=1.0, stt_url=stt_url)
+            if interval > 0:
+                time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        emit_event("listener_stopped", {"backend": "stub", "emitted": count})
 
 
 def main():
@@ -189,7 +235,7 @@ def main():
     parser.add_argument(
         "--backend",
         default=os.environ.get("WAKE_WORD_BACKEND", "porcupine"),
-        choices=["porcupine", "oww"],
+        choices=["porcupine", "oww", "stub"],
         help="Wake word backend (default: porcupine)"
     )
     parser.add_argument(
@@ -218,10 +264,31 @@ def main():
         default=os.environ.get("STT_API_URL", ""),
         help="STT API URL (e.g. http://127.0.0.1:8765). If set, triggers VAD+STT on wake word.",
     )
+    parser.add_argument(
+        "--max-events",
+        type=int,
+        default=int(os.environ.get("WAKE_WORD_MAX_EVENTS", "1")),
+        help="Stub backend only: number of wake events to emit (<=0 means forever).",
+    )
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=float(os.environ.get("WAKE_WORD_STUB_INTERVAL", "0.1")),
+        help="Stub backend only: seconds between emitted wake events.",
+    )
     args = parser.parse_args()
 
     base = os.path.dirname(__file__)
     stt_url = args.stt_url or None
+
+    if args.backend == "stub":
+        run_stub(
+            max_events=args.max_events,
+            interval=args.interval,
+            word=args.builtin_keyword or "claudette",
+            stt_url=stt_url,
+        )
+        return
 
     if args.backend == "porcupine":
         if args.builtin_keyword and args.model:
@@ -235,14 +302,20 @@ def main():
         if not args.builtin_keyword and not os.path.exists(args.model):
             print(json.dumps({"error": f"Porcupine model not found: {args.model}"}), flush=True)
             sys.exit(1)
-        run_porcupine(args.model, args.access_key, args.threshold, builtin_keyword=args.builtin_keyword)
+        run_porcupine(
+            args.model,
+            args.access_key,
+            args.threshold,
+            stt_url=stt_url,
+            builtin_keyword=args.builtin_keyword,
+        )
     else:
         if not args.model:
             args.model = os.path.join(base, "models", "claudette.tflite")
         if not os.path.exists(args.model):
             print(json.dumps({"error": f"openWakeWord model not found: {args.model}"}), flush=True)
             sys.exit(1)
-        run_oww(args.model, args.threshold)
+        run_oww(args.model, args.threshold, stt_url=stt_url)
 
 
 if __name__ == "__main__":

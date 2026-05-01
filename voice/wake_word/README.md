@@ -12,5 +12,14 @@ Reusable wake-word prototype code, training scripts, listeners, and model experi
 - `claudette-wake-word.service` — service/unit wiring for Claudette Home
 - `models/` — product-local models if we later decide product packaging needs them
 
+## Stub backend for CI/dev
+`wake_word_bridge.py` also supports a deterministic `stub` backend for no-hardware runs:
+
+```bash
+python3 voice/wake_word/wake_word_bridge.py --backend stub --max-events 3 --interval 0
+```
+
+It emits the normal listener lifecycle + `wake_word_detected` JSON events, so the rest of the Claudette Home voice pipeline can be exercised in tests without a microphone, Porcupine credentials, or an openWakeWord model.
+
 ## Rule
 If it could plausibly power another product besides Claudette, it belongs in `mc-audio-framework`.

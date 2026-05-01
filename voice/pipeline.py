@@ -47,9 +47,11 @@ Environment:
   HA_TOKEN=eyJ...
 
   # Wake word
-  WAKE_WORD_BACKEND=porcupine|oww
+  WAKE_WORD_BACKEND=porcupine|oww|stub
   PORCUPINE_ACCESS_KEY=...
   WAKE_WORD_MODEL=voice/wake_word/models/claudette_linux.ppn
+  WAKE_WORD_MAX_EVENTS=1              — stub mode: finite wake events for CI/dev
+  WAKE_WORD_STUB_INTERVAL=0.1         — stub mode: seconds between emitted events
 
   # Audio recording
   RECORD_SECONDS=5                    — how long to record after wake word (default: 5)
