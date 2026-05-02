@@ -1,0 +1,19 @@
+schema: spec-driven
+
+context: |
+  mc-claudette-home — natural-language home automation app, brain of the Claudette family.
+  Stack: Python (brain, voice, ha), vanilla HTML/SVG (dashboard), Home Assistant integration.
+  Whisper STT + Gemini Kore TTS + Claudette via OpenClaw. Wake word: "Claudette".
+  Pilot: Xagħra (Gozo) house, Android POE touchscreen panels (YC-SM10P).
+  No cloud dependency for core function — cloud paths must be opt-in by design.
+
+rules:
+  proposal:
+    - State the user-facing scenario in concrete house / occupant terms (Mattie, guest, Rayes).
+    - List explicit Non-goals.
+    - Identify whether the change requires cloud; cloud paths must be opt-in.
+    - Identify the affected component (brain/bridge/dashboard/ha/voice).
+  tasks:
+    - Each task ≤ 2 hours; split otherwise.
+    - For Python: include the verification step (pytest path or manual exercise).
+    - For HA-affecting changes: note the panel/automation impact explicitly.
