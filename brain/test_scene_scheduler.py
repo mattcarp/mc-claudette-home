@@ -143,8 +143,11 @@ class TestVoiceTrigger:
         assert voice_to_scene("heading out for the day") == "away"
 
     def test_coming_home_clears(self):
-        # "I'm home" → None (clear override)
-        assert voice_to_scene("I'm home") is None
+        # "I'm home" → OVERRIDE_CLEAR sentinel (not None — distinguishes from "no match")
+        from brain.scene_scheduler import OVERRIDE_CLEAR
+        assert voice_to_scene("I'm home") == OVERRIDE_CLEAR
+        assert voice_to_scene("i'm back") == OVERRIDE_CLEAR
+        assert voice_to_scene("welcome home") == OVERRIDE_CLEAR
 
     def test_unknown_returns_none(self):
         assert voice_to_scene("play some music") is None

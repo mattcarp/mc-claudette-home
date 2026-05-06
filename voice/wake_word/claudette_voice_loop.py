@@ -20,6 +20,7 @@ Environment:
 
 import argparse
 import os
+import struct
 import sys
 import time
 from pathlib import Path
@@ -40,10 +41,11 @@ from wake_word_detector import (
 
 class STTClient:
     """Client for the Whisper STT service."""
-    
-    def __init__(self, base_url: str = "http://localhost:8765"):
+
+    def __init__(self, base_url: str = "http://localhost:8765", api_key: str | None = None):
         self.base_url = base_url
-        
+        self.api_key = api_key if api_key is not None else os.environ.get("STT_API_KEY", "")
+
     def health_check(self) -> bool:
         """Check if STT service is running."""
         try:
@@ -51,22 +53,25 @@ class STTClient:
             return response.status_code == 200
         except requests.RequestException:
             return False
-    
+
     def transcribe_audio(self, audio_data: bytes, content_type: str = "audio/wav") -> str:
         """
         Send audio to STT service and get transcription.
-        
+
         Args:
             audio_data: Raw audio bytes
             content_type: MIME type of audio
-            
+
         Returns:
             Transcribed text
         """
-        headers = {"Content-Type": content_type}
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
         response = requests.post(
             f"{self.base_url}/transcribe",
-            data=audio_data,
+            files={"audio": ("command.wav", audio_data, content_type)},
             headers=headers,
             timeout=30,
         )

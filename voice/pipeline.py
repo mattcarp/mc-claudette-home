@@ -253,7 +253,74 @@ def transcribe(audio_bytes: bytes, stub: bool = False) -> str:
 # Intent → HA
 # ---------------------------------------------------------------------------
 
-def handle_transcript(transcript: str, bridge, stub: bool = False) -> dict:
+def _init_scene_scheduler():
+    """Initialize the scene scheduler. Returns SceneScheduler or None."""
+    try:
+        from brain.scene_scheduler import SceneScheduler, voice_to_scene, OVERRIDE_CLEAR
+        scheduler = SceneScheduler()
+        logger.info("Scene scheduler initialized")
+        return scheduler
+    except Exception as e:
+        logger.warning(f"Scene scheduler unavailable: {e}")
+        return None
+
+
+def _handle_scene_trigger(transcript: str, scheduler, bridge) -> Optional[dict]:
+    """
+    Check if a transcript is a scene voice trigger and handle it.
+
+    Returns a result dict if handled, or None if it should fall through to the intent parser.
+    """
+    from brain.scene_scheduler import voice_to_scene, OVERRIDE_CLEAR
+
+    scene_name = voice_to_scene(transcript)
+    if scene_name is None:
+        return None  # No match — let intent parser handle it
+
+    if scene_name == OVERRIDE_CLEAR:
+        scheduler._clear_override()
+        response = "Welcome home! Auto schedule resumed."
+        logger.info(f"Scene override cleared via voice trigger: {transcript!r}")
+        return {
+            "transcript": transcript,
+            "action": {"action": "clear_override"},
+            "results": [],
+            "response": response,
+        }
+
+    # Activate the scene through the scheduler
+    result = scheduler.activate(scene_name, source="voice")
+    scene_actions = result.get("actions", [])
+
+    # Execute scene actions through HA bridge
+    ha_results = []
+    for act in scene_actions:
+        action_dict = {
+            "action": "call_service",
+            "domain": act["domain"],
+            "service": act["service"],
+            "entity_id": act["entity_id"],
+            "params": act.get("params", {}),
+        }
+        try:
+            r = bridge.execute_action(action_dict)
+            ha_results.append(r if isinstance(r, dict) else {"ok": True})
+        except Exception as e:
+            ha_results.append({"error": str(e)})
+            logger.warning(f"Scene action failed: {act} — {e}")
+
+    response = build_scene_response(scene_name, ha_results)
+    logger.info(f"Scene '{scene_name}' activated via voice trigger: {transcript!r}")
+
+    return {
+        "transcript": transcript,
+        "action": {"action": "activate_scene", "scene": scene_name},
+        "results": ha_results,
+        "response": response,
+    }
+
+
+def handle_transcript(transcript: str, bridge, stub: bool = False, scheduler=None) -> dict:
     """
     Parse a transcript and execute the HA action.
 
@@ -261,11 +328,18 @@ def handle_transcript(transcript: str, bridge, stub: bool = False) -> dict:
         transcript: Spoken text from STT
         bridge: HABridge or HABridgeStub instance
         stub: If True, uses SAMPLE_ENTITIES (no live HA)
+        scheduler: Optional SceneScheduler for voice trigger handling
 
     Returns:
         Result dict with action taken and HA response
     """
     logger.info(f"Parsing intent: {transcript!r}")
+
+    # Check for scene voice triggers first (before intent parser)
+    if scheduler:
+        scene_result = _handle_scene_trigger(transcript, scheduler, bridge)
+        if scene_result is not None:
+            return scene_result
 
     try:
         from intent_parser import parse_intent, format_action_summary
@@ -409,7 +483,13 @@ def build_response(action: Union[dict, list], results: list) -> str:
 
     action_type = action.get("action")
 
-    if action_type == "clarify":
+    if action_type == "clear_override":
+        return "Welcome home! Auto schedule resumed."
+
+    elif action_type == "activate_scene":
+        return build_scene_response(action.get("scene", "unknown"), results)
+
+    elif action_type == "clarify":
         return action.get("question", "Could you clarify?")
 
     elif action_type == "query":
@@ -473,11 +553,35 @@ def build_response(action: Union[dict, list], results: list) -> str:
     return "Done."
 
 
+def build_scene_response(scene_name: str, results: list) -> str:
+    """Build a natural-language TTS response for scene activation."""
+    failures = [r for r in results if not r.get("ok", True)]
+    success_count = len(results) - len(failures)
+
+    scene_phrases = {
+        "morning": "Good morning! Lights are on and the day is starting.",
+        "night": "Goodnight. Hallway light is on, everything else is off.",
+        "daytime": "Daytime mode — lights are off to save energy.",
+        "evening": "Evening scene set — living room and kitchen are cosy.",
+        "away": "I've secured the house. All lights off, climate off.",
+    }
+
+    if failures and success_count == 0:
+        return f"I tried to set {scene_name} but nothing responded. Check the hardware."
+
+    base = scene_phrases.get(scene_name, f"{scene_name.title()} scene activated.")
+
+    if failures:
+        base += f" ({success_count} actions done, {len(failures)} failed)"
+
+    return base
+
+
 # ---------------------------------------------------------------------------
 # Wake word event loop (reads stdout from wake_word_bridge.py)
 # ---------------------------------------------------------------------------
 
-def run_pipeline_from_stdin(stub: bool = False, ha_events: bool = False):
+def run_pipeline_from_stdin(stub: bool = False, ha_events: bool = False, scene_scheduler: bool = False):
     """
     Main pipeline loop: reads JSON events from stdin (piped from wake_word_bridge.py).
     On wake_word_detected: records audio → STT → intent → HA.
@@ -489,6 +593,9 @@ def run_pipeline_from_stdin(stub: bool = False, ha_events: bool = False):
       # With HA event emitter thread (feeds state_changed events into pipeline):
       python3 wake_word/wake_word_bridge.py | python3 pipeline.py --ha-events
 
+      # With scene scheduler (auto-evaluates time-of-day scenes):
+      python3 wake_word/wake_word_bridge.py | python3 pipeline.py --scene-scheduler
+
     In stub mode:
       echo '{"type":"wake_word_detected","word":"claudette","backend":"stub"}' | python3 pipeline.py --stub
     """
@@ -498,12 +605,15 @@ def run_pipeline_from_stdin(stub: bool = False, ha_events: bool = False):
     # Initialize proactive alert pipeline integration
     alert_integration = _init_alert_integration()
 
+    # Initialize scene scheduler if requested
+    scheduler = _init_scene_scheduler() if scene_scheduler else None
+
     # Start HA event emitter thread if requested
     ha_emitter = None
     if ha_events and not stub:
         ha_emitter = _init_ha_event_emitter(alert_integration)
 
-    logger.info(f"Pipeline started. Waiting for wake word events... (stub={stub}, ha_events={ha_events})")
+    logger.info(f"Pipeline started. Waiting for wake word events... (stub={stub}, ha_events={ha_events}, scene_scheduler={scene_scheduler})")
 
     for line in sys.stdin:
         line = line.strip()
@@ -519,12 +629,20 @@ def run_pipeline_from_stdin(stub: bool = False, ha_events: bool = False):
 
         if event_type == "wake_word_detected":
             logger.info(f"Wake word detected: {event.get('word')} (backend={event.get('backend')})")
+            # Evaluate time-based scenes at conversation start
+            if scheduler:
+                try:
+                    active = scheduler.evaluate()
+                    if active:
+                        logger.info(f"Time-based scene eval: {active}")
+                except Exception as e:
+                    logger.warning(f"Scene eval failed: {e}")
             # Deliver any batched low-priority alerts at conversation start
             if alert_integration:
                 delivered = alert_integration.on_conversation_start()
                 if delivered:
                     logger.info(f"Delivered {delivered} batched alert(s) at conversation start")
-            _handle_wake_word(bridge, stub)
+            _handle_wake_word(bridge, stub, scheduler)
 
         elif event_type == "state_changed":
             # HA WebSocket state change → feed to proactive alert engine
@@ -585,7 +703,7 @@ def _init_alert_integration():
         return None
 
 
-def _handle_wake_word(bridge, stub: bool):
+def _handle_wake_word(bridge, stub: bool, scheduler=None):
     """React to a wake word event: record → transcribe → parse → execute."""
     # Record
     try:
@@ -609,7 +727,7 @@ def _handle_wake_word(bridge, stub: bool):
         return
 
     # Intent + HA
-    result = handle_transcript(transcript, bridge, stub=stub)
+    result = handle_transcript(transcript, bridge, stub=stub, scheduler=scheduler)
     response = result.get("response", "")
     if response:
         logger.info(f"Response: {response}")
@@ -622,15 +740,16 @@ def _handle_wake_word(bridge, stub: bool):
 # Text mode — bypass wake word + STT, type a command
 # ---------------------------------------------------------------------------
 
-def run_text_mode(text: str, stub: bool = False):
+def run_text_mode(text: str, stub: bool = False, scene_scheduler: bool = False):
     """
     Shortcut: skip wake word and STT, directly parse a typed command.
     Good for testing intent parser + HA bridge from the CLI.
     """
     from ha_bridge import get_bridge
     bridge = get_bridge(stub=stub)
+    scheduler = _init_scene_scheduler() if scene_scheduler else None
 
-    result = handle_transcript(text, bridge, stub=stub)
+    result = handle_transcript(text, bridge, stub=stub, scheduler=scheduler)
     print(json.dumps(result, indent=2))
     return result
 
@@ -695,6 +814,10 @@ def main():
         help="Start HA WebSocket event emitter thread for proactive alerts"
     )
     parser.add_argument(
+        "--scene-scheduler", action="store_true",
+        help="Enable scene scheduler (time-of-day eval + voice trigger routing)"
+    )
+    parser.add_argument(
         "--write-service", action="store_true",
         help="Write systemd service file to /etc/systemd/system/claudette-pipeline.service"
     )
@@ -705,10 +828,10 @@ def main():
         return
 
     if args.text:
-        run_text_mode(args.text, stub=args.stub)
+        run_text_mode(args.text, stub=args.stub, scene_scheduler=args.scene_scheduler)
     else:
         # Read wake word events from stdin (piped from wake_word_bridge.py)
-        run_pipeline_from_stdin(stub=args.stub, ha_events=args.ha_events)
+        run_pipeline_from_stdin(stub=args.stub, ha_events=args.ha_events, scene_scheduler=args.scene_scheduler)
 
 
 if __name__ == "__main__":

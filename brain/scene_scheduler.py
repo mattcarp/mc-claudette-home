@@ -323,23 +323,31 @@ class SceneScheduler:
 # Voice trigger mapping — intent parser integration point
 # ---------------------------------------------------------------------------
 
+# Sentinel: clear manual override (no scene activation, just resume auto-schedule)
+OVERRIDE_CLEAR = "__clear_override__"
+
 VOICE_TRIGGER_MAP = {
     "good morning": "morning",
     "morning": "morning",
     "goodnight": "night",
     "good night": "night",
+    "bedtime": "night",
     "i'm leaving": "away",
     "heading out": "away",
     "leaving": "away",
-    "i'm home": None,  # clear override, let auto schedule resume
-    "i'm back": None,
+    "i'm home": OVERRIDE_CLEAR,
+    "i'm back": OVERRIDE_CLEAR,
+    "welcome home": OVERRIDE_CLEAR,
 }
 
 
 def voice_to_scene(transcript: str) -> Optional[str]:
-    """Map a voice transcript to a scene name.
-    
-    Returns None if no match (intent parser handles unknowns).
+    """Map a voice transcript to a scene name or override-clear sentinel.
+
+    Returns:
+        str   — scene name to activate ("morning", "night", "away")
+        OVERRIDE_CLEAR — clear any manual override (e.g. "I'm home")
+        None  — no match (intent parser handles unknowns)
     """
     lower = transcript.lower().strip()
     for trigger, scene in VOICE_TRIGGER_MAP.items():

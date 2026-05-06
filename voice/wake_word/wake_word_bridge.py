@@ -16,6 +16,7 @@ Environment:
   WAKE_WORD_MODEL=path/to/model        (optional, overrides --model default)
   WAKE_WORD_BUILTIN_KEYWORD=keyword    (optional, Porcupine built-in keyword)
   WAKE_WORD_THRESHOLD=0.5              (optional, detection threshold)
+  STT_API_KEY=...                      (optional, Bearer token for STT API auth)
 
 This script is the entry point for the systemd service (future).
 On detection: writes event to stdout (JSON) and triggers callback.
@@ -29,6 +30,8 @@ import signal
 import struct
 import sys
 import time
+import urllib.request
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -61,6 +64,60 @@ def on_detection(backend: str, word: str, score: float = None, stt_url: Optional
         emit_event("stt_skipped", {"reason": "no STT URL configured"})
 
 
+def _build_multipart_audio_body(
+    audio_bytes: bytes,
+    field_name: str = "audio",
+    filename: str = "command.wav",
+    content_type: str = "audio/wav",
+):
+    """Build a multipart/form-data body for the STT API upload contract."""
+    boundary = f"----ClaudetteBoundary{uuid.uuid4().hex}"
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode("utf-8"),
+            (
+                f'Content-Disposition: form-data; name="{field_name}"; '
+                f'filename="{filename}"\r\n'
+            ).encode("utf-8"),
+            f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
+            audio_bytes,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("utf-8"),
+        ]
+    )
+    return boundary, body
+
+
+def _post_audio_to_stt(
+    stt_url: str,
+    audio_bytes: bytes,
+    filename: str = "command.wav",
+    content_type: str = "audio/wav",
+):
+    """POST audio to the STT API using the multipart contract expected by FastAPI."""
+    boundary, body = _build_multipart_audio_body(
+        audio_bytes,
+        filename=filename,
+        content_type=content_type,
+    )
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Content-Length": str(len(body)),
+    }
+    stt_api_key = os.environ.get("STT_API_KEY", "")
+    if stt_api_key:
+        headers["Authorization"] = f"Bearer {stt_api_key}"
+
+    req = urllib.request.Request(
+        f"{stt_url}/transcribe",
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())
+
+
 def _run_stt_pipeline(stt_url: str):
     """Record speech with VAD, send to STT API, emit transcript event."""
     import sys as _sys
@@ -80,16 +137,7 @@ def _run_stt_pipeline(stt_url: str):
         emit_event("stt_no_speech", {})
         return
 
-    # POST audio to STT API
-    import urllib.request
-    req = urllib.request.Request(
-        f"{stt_url}/transcribe",
-        data=result.audio_bytes,
-        headers={"Content-Type": "audio/wav"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        body = json.loads(resp.read())
+    body = _post_audio_to_stt(stt_url, result.audio_bytes)
 
     transcript = body.get("text", "")
     emit_event("stt_transcript", {
