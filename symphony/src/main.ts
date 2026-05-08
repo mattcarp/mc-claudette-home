@@ -23,12 +23,15 @@ async function main(): Promise<void> {
   }
 
   const orch = new Orchestrator(workflow, logger);
-  await orch.start();
 
   const port = cliPort ?? workflow.config.server?.port;
   const host = workflow.config.server?.host ?? "127.0.0.1";
   let server: { close: () => void } | null = null;
+  // Bind HTTP before orchestrator.start(): start() may block on Linear
+  // (startup cleanup / reconciliation). Operators need /api/v1/state for triage.
   if (port) server = startHttpServer(orch, port, host, logger);
+
+  await orch.start();
 
   const shutdown = async (signal: string) => {
     logger.info("shutdown", { signal });
@@ -39,6 +42,23 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
+
+// Catch promise rejections that don't have a .catch() somewhere in the chain.
+// Without this Node 24+ exits silently with the version banner and no trace,
+// which is what happened to the CAD harness on 2026-05-06 around 08:46 UTC.
+process.on("unhandledRejection", (reason) => {
+  const err = reason instanceof Error ? reason.stack : String(reason);
+  logger.error("fatal.unhandled_rejection", { err });
+  // Re-throw so a parent supervisor (or our launch loop) can decide what to do.
+  // Defer one tick to let the logger flush.
+  setImmediate(() => process.exit(70));
+});
+
+process.on("uncaughtException", (err) => {
+  const stack = err instanceof Error ? err.stack : String(err);
+  logger.error("fatal.uncaught_exception", { err: stack });
+  setImmediate(() => process.exit(71));
+});
 
 main().catch((err) => {
   logger.error("fatal", { err: err instanceof Error ? err.stack : String(err) });

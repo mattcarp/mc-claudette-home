@@ -23,6 +23,18 @@ interface RawIssue {
   };
 }
 
+/** Application-side label filters (team/project query is wider). Exported for tests. */
+export function issueMatchesTrackerFilters(
+  labelsLower: string[],
+  tracker: Pick<TrackerConfig, "exclude_labels" | "require_any_labels">,
+): boolean {
+  const excludeLabels = new Set(tracker.exclude_labels.map((s) => s.toLowerCase()));
+  if (excludeLabels.size > 0 && labelsLower.some((l) => excludeLabels.has(l))) return false;
+  const requireAny = tracker.require_any_labels.map((s) => s.toLowerCase()).filter(Boolean);
+  if (requireAny.length > 0 && !labelsLower.some((l) => requireAny.includes(l))) return false;
+  return true;
+}
+
 function normalize(raw: RawIssue, terminalStates: Set<string>): Issue {
   const blocked_by: string[] = [];
   for (const rel of raw.inverseRelations?.nodes ?? []) {
@@ -111,7 +123,6 @@ export class LinearClient {
     const out: Issue[] = [];
     let after: string | null = null;
     const terminal = this.terminalSet();
-    const excludeLabels = new Set(this.cfg.exclude_labels.map((s) => s.toLowerCase()));
     type Page = { issues: { nodes: RawIssue[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } };
     while (true) {
       const data: Page = await gql<Page>(this.cfg.api_key, query, {
@@ -122,7 +133,7 @@ export class LinearClient {
       });
       for (const n of data.issues.nodes) {
         const norm = normalize(n, terminal);
-        if (excludeLabels.size > 0 && norm.labels.some((l) => excludeLabels.has(l))) continue;
+        if (!issueMatchesTrackerFilters(norm.labels, this.cfg)) continue;
         out.push(norm);
       }
       if (!data.issues.pageInfo.hasNextPage) break;
@@ -148,6 +159,72 @@ export class LinearClient {
     const m = new Map<string, string>();
     for (const n of data.issues.nodes) m.set(n.id, n.state.name);
     return m;
+  }
+
+  async markIssueStarted(issueId: string): Promise<{ ok: boolean; reason?: string }> {
+    // Find the team's "started"-type state (prefer "In Progress" by name), then update.
+    // No-op if the issue is already in a started-type state.
+    const data = await gql<{
+      issue: {
+        state: { id: string; type: string; name: string };
+        team: { states: { nodes: { id: string; type: string; name: string }[] } };
+      };
+    }>(
+      this.cfg.api_key,
+      `query($id: String!) {
+        issue(id: $id) {
+          state { id type name }
+          team { states { nodes { id type name } } }
+        }
+      }`,
+      { id: issueId },
+    );
+    if (data.issue.state.type === "started") {
+      return { ok: true, reason: "already started" };
+    }
+    const states = data.issue.team.states.nodes;
+    const started =
+      states.find((s) => s.type === "started" && s.name === "In Progress") ??
+      states.find((s) => s.type === "started");
+    if (!started) return { ok: false, reason: "no started state on team" };
+    const update = await gql<{ issueUpdate: { success: boolean } }>(
+      this.cfg.api_key,
+      `mutation($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }`,
+      { id: issueId, stateId: started.id },
+    );
+    return { ok: update.issueUpdate.success };
+  }
+
+  async markIssueInReview(issueId: string): Promise<{ ok: boolean; reason?: string }> {
+    const data = await gql<{
+      issue: {
+        state: { id: string; name: string };
+        team: { states: { nodes: { id: string; name: string }[] } };
+      };
+    }>(
+      this.cfg.api_key,
+      `query($id: String!) {
+        issue(id: $id) {
+          state { id name }
+          team { states { nodes { id name } } }
+        }
+      }`,
+      { id: issueId },
+    );
+    if (data.issue.state.name === "In Review") {
+      return { ok: true, reason: "already in review" };
+    }
+    const states = data.issue.team.states.nodes;
+    const review =
+      states.find((s) => s.name === "In Review") ??
+      states.find((s) => /review/i.test(s.name) && !/progress/i.test(s.name));
+    if (!review) return { ok: false, reason: "no In Review state on team" };
+    const update = await gql<{ issueUpdate: { success: boolean } }>(
+      this.cfg.api_key,
+      `mutation($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }`,
+      { id: issueId, stateId: review.id },
+    );
+    return { ok: update.issueUpdate.success };
   }
 
   async markIssueDone(issueId: string): Promise<{ ok: boolean; reason?: string }> {
@@ -184,5 +261,14 @@ export class LinearClient {
     const data = await gql<{ issues: { nodes: RawIssue[] } }>(this.cfg.api_key, query, { ids });
     const terminal = this.terminalSet();
     return data.issues.nodes.map((n) => normalize(n, terminal));
+  }
+
+  async addCommentToIssue(issueId: string, body: string): Promise<{ ok: boolean; reason?: string }> {
+    const update = await gql<{ commentCreate: { success: boolean } }>(
+      this.cfg.api_key,
+      `mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`,
+      { issueId, body },
+    );
+    return { ok: update.commentCreate.success };
   }
 }

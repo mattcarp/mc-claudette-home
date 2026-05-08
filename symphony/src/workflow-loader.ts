@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import YAML from "yaml";
 import { Liquid } from "liquidjs";
 import { WorkflowConfigSchema, type Workflow, type WorkflowConfig, type Issue } from "./types.js";
+import { auditAllowlistForPosture } from "./agent/posture.js";
 
 const FRONT_MATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
@@ -45,13 +46,27 @@ export async function loadWorkflow(path: string): Promise<Workflow> {
     body.trim().length > 0
       ? body
       : "You are working on {{ issue.identifier }}: {{ issue.title }}.\n\n{{ issue.description }}";
+  for (const w of auditWorkflow(config)) {
+    // Console.warn is fine here — loadWorkflow is called at startup, before
+    // structured logging is wired. The point is for an operator to see this.
+    console.warn(`workflow audit: ${w}`);
+  }
   return { config, promptTemplate, sourcePath: abs };
+}
+
+export function auditWorkflow(config: WorkflowConfig): string[] {
+  const warnings: string[] = [];
+  warnings.push(
+    ...auditAllowlistForPosture(config.codex?.command ?? "", config.posture),
+  );
+  return warnings;
 }
 
 export async function renderPrompt(
   template: string,
   issue: Issue,
   attempt: number | null,
+  posture: "greenfield" | "production" = "greenfield",
 ): Promise<string> {
-  return liquid.parseAndRender(template, { issue, attempt });
+  return liquid.parseAndRender(template, { issue, attempt, posture });
 }

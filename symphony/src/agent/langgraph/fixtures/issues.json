@@ -1,0 +1,29 @@
+[
+  {
+    "id": "mag-48",
+    "identifier": "MAG-48",
+    "title": "test(summary): add a real health smoke for the daily summary",
+    "description": "Add a smoke test or documented command.",
+    "state": "Todo",
+    "labels": ["summary", "reliability", "test"],
+    "blocked_by": []
+  },
+  {
+    "id": "mag-49",
+    "identifier": "MAG-49",
+    "title": "chore(dashboard): document Mac-reachable workshop URL verification",
+    "description": "Add operator docs.",
+    "state": "Todo",
+    "labels": ["dashboard", "docs"],
+    "blocked_by": []
+  },
+  {
+    "id": "mag-50",
+    "identifier": "MAG-50",
+    "title": "feat(dashboard): classify unreachable harnesses by likely cause",
+    "description": "Touches dashboard fetch behavior.",
+    "state": "Todo",
+    "labels": ["dashboard", "reliability"],
+    "blocked_by": []
+  }
+]
